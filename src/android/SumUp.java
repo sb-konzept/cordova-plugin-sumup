@@ -11,21 +11,17 @@ import org.apache.cordova.CordovaInterface;
 import org.apache.cordova.CordovaWebView;
 import org.apache.cordova.PluginResult.Status;
 
-import com.sumup.merchant.api.SumUpState;
-import com.sumup.merchant.api.SumUpAPI;
-import com.sumup.merchant.api.SumUpLogin;
-import com.sumup.merchant.api.SumUpPayment;
-import com.sumup.merchant.cardreader.ReaderLibManager;
-import com.sumup.merchant.CoreState;
-import com.sumup.merchant.Models.TransactionInfo;
-import com.sumup.readerlib.CardReaderManager;
-import com.sumup.merchant.Models.UserModel;
-
+import com.sumup.merchant.reader.api.SumUpState;
+import com.sumup.merchant.reader.api.SumUpAPI;
+import com.sumup.merchant.reader.api.SumUpPayment;
+import com.sumup.merchant.reader.models.TransactionInfo;
 import java.math.BigDecimal;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
+
+import com.sumup.merchant.reader.api.SumUpLogin;
 
 /**
  * @author Marius Backes
@@ -90,23 +86,55 @@ public class SumUp extends CordovaPlugin {
         switch(Action.valueOf(action)){
             case login:
                 result = login(affiliateKey, args, callbackContext); break;
-            case auth:
-                result = auth(args, callbackContext); break;
-            case getSettings:
-                result = getSettings(args, callbackContext); break;
-            case logout:
-                result = logout(args, callbackContext); break;
             case isLoggedIn:
                 result = isLoggedIn(args, callbackContext); break;
             case prepare:
                 result = prepare(args, callbackContext); break;
-            case closeConnection:
-                result = closeConnection(args, callbackContext); break;
             case pay:
                 result = pay(args, callbackContext); break;
         }
 
         return result;
+    }
+
+    private boolean prepare(JSONArray args, CallbackContext callbackContext) {
+        callback = callbackContext;
+        try {
+            cordova.getActivity().runOnUiThread(() -> SumUpAPI.prepareForCheckout());
+            JSONObject obj = createReturnObject(1, "SumUp checkout prepared successfully");
+            returnCordovaPluginResult(PluginResult.Status.OK, obj, false);
+        } catch (Exception e) {
+            JSONObject obj = createReturnObject(PREPARE_PAYMENT_ERROR, e.getMessage());
+            returnCordovaPluginResult(PluginResult.Status.ERROR, obj, true);
+            return false;
+        }
+
+        return true;
+    }
+
+    private boolean isLoggedIn(JSONArray args, CallbackContext callbackContext) {
+        // runnable to run on the UIThread
+        Runnable runnable = () -> {
+            boolean isLoggedIn = false;
+            isLoggedIn = SumUpAPI.isLoggedIn();
+            try {
+                JSONObject obj = new JSONObject();
+                obj.put("code", 1);
+                obj.put("isLoggedIn", isLoggedIn);
+                returnCordovaPluginResult(PluginResult.Status.OK, obj, true);
+            } catch (Exception e) {
+                JSONObject obj = createReturnObject(CHECK_FOR_LOGIN_STATUS_FAILED, e.getMessage());
+                returnCordovaPluginResult(PluginResult.Status.ERROR, obj, false);
+            }
+        };
+
+        callback = callbackContext;
+        // setting the activity result breaks further calls
+        // with error "Attempted to send a second callback error"
+        // cordova.setActivityResultCallback(this);
+        cordova.getActivity().runOnUiThread(runnable);
+
+        return true;
     }
 
     // tries to login sumup user with credentials or access token
@@ -143,178 +171,6 @@ public class SumUp extends CordovaPlugin {
         } else {
             JSONObject obj = createReturnObject(NO_AFFILIATE_KEY, "No affiliate key available");
             returnCordovaPluginResult(PluginResult.Status.ERROR, obj, false);
-        }
-
-        return true;
-    }
-
-    // authenticate with the terminal
-    private boolean auth(JSONArray args, CallbackContext callbackContext) {
-        callback = callbackContext;
-        try {
-            cordova.getThreadPool().execute(() -> {
-                Object accessToken = null;
-                try {
-                    accessToken = args.get(0);
-                } catch (Exception e) {
-                    System.out.println(e.getMessage());
-                }
-
-                if (accessToken != null) {
-                    UserModel um;
-                    um = CoreState.Instance().get(UserModel.class);
-                    um.setAccessToken(accessToken.toString());
-
-                    JSONObject obj = createReturnObject(AUTH_SUCCESSFUL, "Authenticate was successful");
-                    returnCordovaPluginResult(PluginResult.Status.OK, obj, false);
-                } else {
-                    JSONObject obj = createReturnObject(NO_ACCESS_TOKEN, "No access token");
-                    returnCordovaPluginResult(PluginResult.Status.ERROR, obj, true);
-                }
-            });
-        } catch (Exception e) {
-            JSONObject obj = createReturnObject(AUTH_ERROR, e.getMessage());
-            returnCordovaPluginResult(PluginResult.Status.ERROR, obj, true);
-            return false;
-        }
-
-        return true;
-    }
-
-    // reads the settings from the logged in user account
-    private boolean getSettings(JSONArray args, CallbackContext callbackContext) {
-        callback = callbackContext;
-        cordova.setActivityResultCallback(this);
-        cordova.getActivity().runOnUiThread(() -> SumUpAPI.openPaymentSettingsActivity(cordova.getActivity(), REQUEST_CODE_PAYMENT_SETTINGS));
-        return true;
-    }
-
-    // logout an user
-    private boolean logout(JSONArray args, CallbackContext callbackContext) {
-        callback = callbackContext;
-        try {
-            Handler handler = new Handler(cordova.getActivity().getMainLooper());
-            handler.post(() -> SumUpAPI.logout());
-
-            JSONObject obj = createReturnObject(1, "Logout successful");
-            returnCordovaPluginResult(PluginResult.Status.OK, obj, false);
-        } catch (Exception e) {
-            JSONObject obj = createReturnObject(LOGOUT_FAILED, e.getMessage());
-            returnCordovaPluginResult(PluginResult.Status.ERROR, obj, true);
-            return false;
-        }
-
-        return true;
-    }
-
-    // checkes whether an user is logged in to proceed some action
-    private boolean isLoggedIn(JSONArray args, CallbackContext callbackContext) {
-        // runnable to run on the UIThread
-        Runnable runnable = () -> {
-            boolean isLoggedIn = false;
-            isLoggedIn = SumUpAPI.isLoggedIn();
-            try {
-                JSONObject obj = new JSONObject();
-                obj.put("code", 1);
-                obj.put("isLoggedIn", isLoggedIn);
-                returnCordovaPluginResult(PluginResult.Status.OK, obj, true);
-            } catch (Exception e) {
-                JSONObject obj = createReturnObject(CHECK_FOR_LOGIN_STATUS_FAILED, e.getMessage());
-                returnCordovaPluginResult(PluginResult.Status.ERROR, obj, false);
-          }
-        };
-
-        callback = callbackContext;
-        // setting the activity result breaks further calls
-        // with error "Attempted to send a second callback error"
-        // cordova.setActivityResultCallback(this);
-        cordova.getActivity().runOnUiThread(runnable);
-
-        return true;
-    }
-
-    // wakes up the terminal to make a payment
-    private boolean prepare(JSONArray args, CallbackContext callbackContext) {
-        callback = callbackContext;
-        try {
-            Handler handler = new Handler(cordova.getActivity().getMainLooper());
-            handler.post(() -> {
-                ReaderLibManager rlm;
-                rlm = CoreState.Instance().get(ReaderLibManager.class);
-
-                //if(!rlm.isReadyToTransmit()) {
-                //    JSONObject obj = createReturnObject(CARDREADER_NOT_READY_TO_TRANSMIT, "Card reader is not ready to transmit");
-                //    returnCordovaPluginResult(PluginResult.Status.ERROR, obj, true);
-                //} else {
-                if(CardReaderManager.getInstance() != null) {
-                    try {
-                        SumUpAPI.prepareForCheckout();
-                        JSONObject obj = createReturnObject(1, "SumUp checkout prepared successfully");
-                        returnCordovaPluginResult(PluginResult.Status.OK, obj, false);
-                    } catch (Exception e) {
-                        JSONObject obj = createReturnObject(ERROR_PREPARING_CHECKOUT, e.getMessage());
-                        returnCordovaPluginResult(PluginResult.Status.ERROR, obj, false);
-                    }
-                } else {
-                    JSONObject obj = createReturnObject(CARDREADER_INSTANCE_NOT_DEFINED, "CardReader instance is not defined");
-                    returnCordovaPluginResult(PluginResult.Status.ERROR, obj, true);
-                }
-                //}
-            });
-        } catch (Exception e) {
-            JSONObject obj = createReturnObject(PREPARE_PAYMENT_ERROR, e.getMessage());
-            returnCordovaPluginResult(PluginResult.Status.ERROR, obj, true);
-            return false;
-        }
-
-        return true;
-    }
-
-    // setup the SDK. Only available for iOS right now.. (TODO?)
-    private boolean setup(JSONArray args, CallbackContext callbackContext) {
-        callback = callbackContext;
-
-        JSONObject obj = createReturnObject(REQUEST_CODE_SETUP, "Not required for Android");
-        returnCordovaPluginResult(PluginResult.Status.OK, obj, false);
-        
-        return true;
-    }
-
-    // test the SDK integration. Only available for iOS right now.. (TODO?)
-    private boolean test(JSONArray args, CallbackContext callbackContext) {
-        callback = callbackContext;
-
-        JSONObject obj = createReturnObject(REQUEST_CODE_TEST, "Currently not available for Android");
-        returnCordovaPluginResult(PluginResult.Status.OK, obj, false);
-
-        return true;
-    }
-
-    // closes the connection to the card reader
-    private boolean closeConnection(JSONArray args, CallbackContext callbackContext) {
-        callback = callbackContext;
-        try {
-            Handler handler = new Handler(cordova.getActivity().getMainLooper());
-            handler.post(() -> {
-                if(CardReaderManager.getInstance() != null) {
-                    try {
-                        CardReaderManager.getInstance().stopDevice();
-                        JSONObject obj = createReturnObject(1, "Card reader successfully stopped");
-                        returnCordovaPluginResult(PluginResult.Status.OK, obj, false);
-                    } catch (Exception e) {
-                        JSONObject obj = createReturnObject(STOP_CARD_READER_ERROR, e.getMessage());
-                        returnCordovaPluginResult(PluginResult.Status.ERROR, obj, true);
-                    }
-                } else {
-                    JSONObject obj = createReturnObject(CARDREADER_INSTANCE_NOT_DEFINED, "CardReader instance is not defined");
-                    returnCordovaPluginResult(PluginResult.Status.ERROR, obj, true);
-                }
-            });
-        } catch (Exception e) {
-            JSONObject obj = createReturnObject(FAILED_CLOSE_CARD_READER_CONN, e.getMessage());
-            returnCordovaPluginResult(PluginResult.Status.ERROR, obj, true);
-
-            return false;
         }
 
         return true;
@@ -357,7 +213,7 @@ public class SumUp extends CordovaPlugin {
                 .total(amount)
                 .currency(currency)
                 .title(title)
-                //.skipSuccessScreen()
+                .skipSuccessScreen()
                 .build();
 
         Runnable runnable = () -> {
@@ -427,14 +283,6 @@ public class SumUp extends CordovaPlugin {
                         returnCordovaPluginResult(PluginResult.Status.OK, obj, false);
                     } else {
                         obj = createReturnObject(code, "Payment error");
-
-                        UserModel um;
-                        um = CoreState.Instance().get(UserModel.class);
-                        if(!um.isLoggedIn()) {
-                            obj = createReturnObject(SumUpAPI.Response.ResultCode.ERROR_NOT_LOGGED_IN, "Not logged in");
-                        } else {
-                            obj = createReturnObject(code, "Payment error");
-                        }
                         returnCordovaPluginResult(PluginResult.Status.ERROR, obj, false);
                     }
                 } else {
